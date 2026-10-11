@@ -1,8 +1,9 @@
 use_default_settings: true
 server:
   port: 8080
-  bind_address: "0.0.0.0"
-  secret_key: "blinky_secret_key_change_me"
+  bind_address: "127.0.0.1"
+  # Per-install secret. Regenerate on setup (setup.sh/setup.ps1) — never expose beyond loopback.
+  secret_key: "4f0c31eb36d39f11a0a14f8d5b6101453ddd5b97af5ece4d0707ba5739b3ce57"
 search:
   formats:
     - html

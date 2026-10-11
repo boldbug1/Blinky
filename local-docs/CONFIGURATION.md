@@ -36,7 +36,7 @@ Model defaults are deliberately reported per source because they are not fully u
 | Key | Purpose | Default/behavior |
 |---|---|---|
 | `BLINKY_SHORTCUT` | saved UI choice | created as `Space`; Rust fallback read uses `Enter`, but both global toggles are currently registered |
-| `BLINKY_REMOTE_TOKEN` | LAN WebSocket shared secret | empty preserves legacy development LAN behavior, including file offers; release mobile file transfer requires a configured token, so set a strong value |
+| `BLINKY_REMOTE_TOKEN` | LAN WebSocket shared secret | required for any non-loopback peer in all modes (fail-closed); empty means remote peers cannot authenticate — pair via QR to configure one; file offers require a configured token plus presented token |
 | `BLINKY_TRANSPORT_MODE` | Rust transport build mode | `development` by default; `release` enables WSS and fail-closed remote auth |
 | `BLINKY_FILE_TRANSFER_MAX_BYTES` | Maximum size of one mobile transfer in either direction | 20 GiB by default (`21474836480` bytes); applies to mobile uploads and PC-to-mobile file downloads; invalid or non-positive values use the default |
 | `BLINKY_DISABLE_UI_OBSERVER` | skip observer child | false/unset starts observer |
@@ -76,7 +76,8 @@ Vite values are build-time frontend variables. The adaptive fallback constructs 
 | `DEFAULT_MESSAGE_LIMIT` | summary message limit | editable service setting |
 | `ALLOW_PUBLIC_COMMANDS` | fallback message-command policy | normal group/direct author checks are already broad; do not rely on this as a strict allowlist |
 | `ALLOWED_COMMAND_PHONES` | comma-separated phone allowlist | consulted only in the fallback public-command branch |
-| `HOST` | HTTP bind host | `127.0.0.1`; setting `0.0.0.0` exposes the service |
+| `HOST` | HTTP bind host | `127.0.0.1`; server also rejects non-loopback requests in code — setting `0.0.0.0` still serves only loopback unless the guard is removed; use a reverse proxy with `WHATSAPP_API_TOKEN` if remote access is needed |
+| `WHATSAPP_API_TOKEN` | optional shared secret for local WhatsApp APIs | empty = loopback-only with no token; when set, REST requires `Authorization: Bearer <token>` (or `X-Api-Token`) and Socket.IO requires `auth: { token }` |
 | `SHOW_TERMINAL_QR` | print login QR in terminal | false |
 | `WWEBJS_AUTH_DIR` | whatsapp-web.js LocalAuth directory | repository-root `.wwebjs_auth` |
 
@@ -128,5 +129,5 @@ Advanced WhatsApp environment-only tunables read through `getSetting` are `AUTO_
 - `.env_example` is the least-bad minimal template but does not list all supported keys.
 - `common/.envexample` is malformed/stale and includes old `CLICKY_*` names; do not copy it.
 - Root Rust/settings defaults, Python provider defaults, WIL/agent defaults, and setup-script examples are not fully unified.
-- `common/searxng/settings.yml` contains the placeholder `blinky_secret_key_change_me`; replace it if the service is exposed beyond local development.
+- `common/searxng/settings.yml` uses a per-install random `secret_key` bound to `127.0.0.1`; compose publishes it as `127.0.0.1:8888:8080` (loopback-only). Regenerate the secret on setup; never publish SearXNG to LAN without rotating it.
 - The mobile subtree instruction references Expo 56 while its package currently pins Expo 57.

@@ -27,11 +27,14 @@ impl TransportMode {
 }
 
 pub(crate) fn remote_auth_required(
-    mode: TransportMode,
+    _mode: TransportMode,
     is_loopback: bool,
-    has_configured_token: bool,
+    _has_configured_token: bool,
 ) -> bool {
-    !is_loopback && (mode.is_release() || has_configured_token)
+    // Fail-closed BYOK default: every non-loopback peer must present
+    // BLINKY_REMOTE_TOKEN, in development and release alike. An unset token
+    // means remote peers cannot authenticate (pair via QR to configure one).
+    !is_loopback
 }
 
 #[cfg(test)]
@@ -55,6 +58,12 @@ mod tests {
     #[test]
     fn release_requires_remote_auth_even_without_a_configured_token() {
         assert!(remote_auth_required(TransportMode::Release, false, false));
+    }
+
+    #[test]
+    fn development_requires_remote_auth_even_without_a_configured_token() {
+        assert!(remote_auth_required(TransportMode::Development, false, false));
+        assert!(remote_auth_required(TransportMode::Development, false, true));
     }
 
     #[test]

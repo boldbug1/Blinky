@@ -118,18 +118,14 @@ pub(crate) async fn handle_control_message(
     sender: ClientSender,
     has_presented_token: bool,
     configured_token: bool,
-    mode: crate::transport::TransportMode,
+    _mode: crate::transport::TransportMode,
 ) {
     let request_id = message
         .get("requestId")
         .and_then(Value::as_str)
         .unwrap_or("");
     let kind = message.get("type").and_then(Value::as_str).unwrap_or("");
-    let authorized = if mode.is_release() {
-        has_presented_token && configured_token
-    } else {
-        !configured_token || has_presented_token
-    };
+    let authorized = has_presented_token && configured_token;
     if !authorized {
         send_json(
             &sender,

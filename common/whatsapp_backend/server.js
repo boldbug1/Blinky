@@ -59,12 +59,34 @@ const frontendDist = frontendDistCandidates.find((p) => existsSync(path.join(p, 
 app.use(express.static(frontendDist));
 
 // ── Session middleware ─────────────────────────────────────────────────────────
-// Validates X-Session-Id header and attaches the session to req.session.
-function isValidSessionId(id) {
-    return typeof id === 'string'
-        && id.length >= 8
-        && id.length <= 64
-        && /^[a-zA-Z0-9_-]+$/.test(id);
+// Loopback + optional shared-token gate. The service is local-only by default
+// (HOST=127.0.0.1); this middleware enforces that even if bound wider, and
+// adds an optional WHATSAPP_API_TOKEN bearer check for BYOK deployments.
+const WHATSAPP_API_TOKEN = (process.env.WHATSAPP_API_TOKEN || '').trim();
+
+function isLoopbackIp(ip) {
+    if (!ip) return false;
+    const clean = ip.replace(/^::ffff:/, '');
+    return clean === '127.0.0.1' || clean === '::1' || clean === '::ffff:127.0.0.1';
+}
+
+function requireLocalhost(req, res, next) {
+    const ip = req.ip || req.socket?.remoteAddress || '';
+    if (!isLoopbackIp(ip)) {
+        return res.status(403).json({ error: 'Forbidden: WhatsApp service is loopback-only' });
+    }
+    next();
+}
+
+function requireApiToken(req, res, next) {
+    if (!WHATSAPP_API_TOKEN) return next();
+    const header = req.headers.authorization || '';
+    const bearer = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    const provided = bearer || (req.headers['x-api-token'] || '').trim();
+    if (provided !== WHATSAPP_API_TOKEN) {
+        return res.status(401).json({ error: 'Unauthorized: invalid WHATSAPP_API_TOKEN' });
+    }
+    next();
 }
 
 function requireSession(req, res, next) {
@@ -78,6 +100,8 @@ function requireSession(req, res, next) {
 }
 
 // ── REST API ──────────────────────────────────────────────────────────────────
+// All local APIs require loopback + (optional) shared token, then session.
+app.use('/api/', requireLocalhost, requireApiToken);
 
 // Register / ensure a session exists.
 // Always use the default session ID to share between app and web
@@ -198,6 +222,21 @@ app.use((req, res) => {
 
 // ── Socket.io ─────────────────────────────────────────────────────────────────
 // Each socket joins its own session room; events are scoped per-user.
+// Rejects non-loopback transports and enforces WHATSAPP_API_TOKEN when set.
+io.use((socket, next) => {
+    const ip = socket.handshake?.address || socket.conn?.remoteAddress || '';
+    if (!isLoopbackIp(ip)) {
+        return next(new Error('Forbidden: loopback-only service'));
+    }
+    if (WHATSAPP_API_TOKEN) {
+        const auth = socket.handshake?.auth || {};
+        const provided = (auth.token || auth.apiToken || '').trim();
+        if (provided !== WHATSAPP_API_TOKEN) {
+            return next(new Error('Unauthorized: invalid WHATSAPP_API_TOKEN'));
+        }
+    }
+    next();
+});
 io.on('connection', async (socket) => {
     const sessionId = DEFAULT_SESSION_ID;
 
@@ -224,8 +263,8 @@ httpServer.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
         const fallback = Number(PORT) + 1;
         console.warn(`[SERVER] Port ${PORT} in use, retrying on ${fallback}...`);
-        setTimeout(() => httpServer.listen(fallback, () => {
-            console.log(`[SERVER] Running at http://localhost:${fallback}`);
+        setTimeout(() => httpServer.listen(fallback, HOST, () => {
+            console.log(`[SERVER] Running at http://${HOST}:${fallback}`);
         }), 1000);
     } else {
         throw err;

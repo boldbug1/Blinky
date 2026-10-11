@@ -15,51 +15,74 @@ export interface SyncedApiKeys {
   deepseek_key?: string;
 }
 
-/**
- * Persists API keys transferred from PC Blinky into hardware Android KeyStore via SecureStore.
- */
-export async function saveSyncedApiKeys(keys: SyncedApiKeys): Promise<void> {
+async function isSecureAvailable(): Promise<boolean> {
   try {
-    const payload = JSON.stringify(keys);
-    const isSecureAvailable = SecureStore ? await SecureStore.isAvailableAsync().catch(() => false) : false;
-    
-    if (isSecureAvailable) {
-      await SecureStore.setItemAsync(SECURE_KEYS_STORAGE_KEY, payload, {
-        keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
-      });
-      // Purge any lingering plaintext fallback copy once hardware keystore succeeds
-      await AsyncStorage.removeItem(ASYNC_KEYS_FALLBACK_KEY).catch(() => {});
-      console.log('[SecureKeys] API Keys securely encrypted in Android KeyStore.');
-    } else {
-      await AsyncStorage.setItem(ASYNC_KEYS_FALLBACK_KEY, payload);
-      console.log('[SecureKeys] API Keys saved to AsyncStorage fallback.');
-    }
-  } catch (err) {
-    console.warn('[SecureKeys] Error saving encrypted API keys on mobile:', err);
-    try {
-      await AsyncStorage.setItem(ASYNC_KEYS_FALLBACK_KEY, JSON.stringify(keys));
-    } catch (_) {}
+    if (!SecureStore) return false;
+    return await SecureStore.isAvailableAsync().catch(() => false);
+  } catch {
+    return false;
   }
 }
 
 /**
- * Retrieves the stored encrypted API keys for standalone mobile execution (PC offline).
+ * Persists BYOK API keys from PC Blinky in hardware-backed storage only
+ * (Android Keystore / iOS Keychain via SecureStore).
+ *
+ * Fail-closed: when SecureStore is unavailable (e.g. Expo Go) keys are NOT
+ * written to plaintext AsyncStorage. Any legacy plaintext copy is purged.
+ */
+export async function saveSyncedApiKeys(keys: SyncedApiKeys): Promise<void> {
+  const secure = await isSecureAvailable();
+  if (!secure) {
+    console.warn('[SecureKeys] SecureStore unavailable — refusing to persist API keys in plaintext. Purging legacy fallback copy.');
+    await AsyncStorage.removeItem(ASYNC_KEYS_FALLBACK_KEY).catch(() => {});
+    return;
+  }
+  try {
+    const payload = JSON.stringify(keys);
+    await SecureStore.setItemAsync(SECURE_KEYS_STORAGE_KEY, payload, {
+      keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+    });
+    // Purge any lingering plaintext fallback copy once hardware keystore succeeds
+    await AsyncStorage.removeItem(ASYNC_KEYS_FALLBACK_KEY).catch(() => {});
+    console.log('[SecureKeys] API Keys securely encrypted in hardware keystore.');
+  } catch (err) {
+    console.warn('[SecureKeys] Error saving encrypted API keys on mobile:', err);
+    // Never fall back to plaintext on write failure.
+  }
+}
+
+/**
+ * Retrieves stored keys from SecureStore only. Performs a one-time migration:
+ * if a legacy AsyncStorage copy exists and SecureStore is available, it is
+ * moved into SecureStore then deleted. Plaintext is never used as a persistent store.
  */
 export async function getSyncedApiKeys(): Promise<SyncedApiKeys> {
   try {
-    const isSecureAvailable = SecureStore ? await SecureStore.isAvailableAsync().catch(() => false) : false;
-    let data: string | null = null;
-
-    if (isSecureAvailable) {
-      data = await SecureStore.getItemAsync(SECURE_KEYS_STORAGE_KEY).catch(() => null);
+    const secure = await isSecureAvailable();
+    if (secure) {
+      const data = await SecureStore.getItemAsync(SECURE_KEYS_STORAGE_KEY).catch(() => null);
+      if (data) {
+        // Opportunistically purge any legacy plaintext copy.
+        await AsyncStorage.removeItem(ASYNC_KEYS_FALLBACK_KEY).catch(() => {});
+        return JSON.parse(data) as SyncedApiKeys;
+      }
+      // One-time migration from legacy plaintext copy.
+      const legacy = await AsyncStorage.getItem(ASYNC_KEYS_FALLBACK_KEY).catch(() => null);
+      if (legacy) {
+        try {
+          const parsed = JSON.parse(legacy) as SyncedApiKeys;
+          await SecureStore.setItemAsync(SECURE_KEYS_STORAGE_KEY, JSON.stringify(parsed), {
+            keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+          });
+        } catch {}
+        await AsyncStorage.removeItem(ASYNC_KEYS_FALLBACK_KEY).catch(() => {});
+        const moved = await SecureStore.getItemAsync(SECURE_KEYS_STORAGE_KEY).catch(() => null);
+        if (moved) return JSON.parse(moved) as SyncedApiKeys;
+      }
+      return {};
     }
-
-    if (!data) {
-      data = await AsyncStorage.getItem(ASYNC_KEYS_FALLBACK_KEY);
-    }
-
-    if (!data) return {};
-    return JSON.parse(data) as SyncedApiKeys;
+    return {};
   } catch (err) {
     console.warn('[SecureKeys] Error loading encrypted API keys on mobile:', err);
     return {};
@@ -79,8 +102,8 @@ export async function hasSyncedApiKeys(): Promise<boolean> {
  */
 export async function clearSyncedApiKeys(): Promise<void> {
   try {
-    const isSecureAvailable = SecureStore ? await SecureStore.isAvailableAsync().catch(() => false) : false;
-    if (isSecureAvailable) {
+    const secure = await isSecureAvailable();
+    if (secure) {
       await SecureStore.deleteItemAsync(SECURE_KEYS_STORAGE_KEY).catch(() => {});
     }
     await AsyncStorage.removeItem(ASYNC_KEYS_FALLBACK_KEY).catch(() => {});

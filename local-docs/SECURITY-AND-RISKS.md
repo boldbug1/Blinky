@@ -17,9 +17,9 @@ This is a source-based development risk register, not a claim that the product h
 
 ## Critical/high-priority findings
 
-### Development remote authentication is optional; release is fail-closed
+### Remote authentication is fail-closed in all modes
 
-`common/src-tauri/src/websocket.rs` binds `0.0.0.0:9001`. Development preserves the legacy behavior where an unset `BLINKY_REMOTE_TOKEN` trusts LAN peers. The release transport variant uses WSS and requires a JSON token auth frame for every non-loopback peer; an unset token therefore leaves remote peers unable to authenticate. Configure a strong token before building release or using development on an untrusted network.
+`common/src-tauri/src/websocket.rs` binds `0.0.0.0:9001`. Every non-loopback peer must present `BLINKY_REMOTE_TOKEN` in development and release alike; an unset token leaves remote peers unable to authenticate. Pair via QR to configure a token before using LAN features or file transfer on any network.
 
 Action: use `bun run build:release`, configure a strong token, and enter the displayed certificate pin in the mobile release build. Rate limiting, request size/time limits, short-lived pairing, and server-side confirmation remain follow-up work.
 
@@ -35,7 +35,7 @@ Action: classify command risk server-side and require a short-lived confirmation
 
 ### Mobile file-transfer boundary
 
-The file listener binds `0.0.0.0:9002`. Release `file_offer` requires a configured `BLINKY_REMOTE_TOKEN` and authenticated WebSocket; development currently permits an empty token for legacy LAN behavior. Rust then issues a random transfer ID and 256-bit temporary bearer token whose SHA-256 digest is stored in memory. Upload and download requests require that capability. The listener uses the same P-256 identity as WSS in release; the mobile module pins HTTPS and rejects HTTP whenever a pin is configured. Development builds use unencrypted HTTP and show an explicit local-network warning; use them only on trusted networks. Release builds use TLS pinning.
+The file listener binds `0.0.0.0:9002`. `file_offer` requires a configured `BLINKY_REMOTE_TOKEN` and authenticated WebSocket in all modes (fail-closed). Rust then issues a random transfer ID and 256-bit temporary bearer token whose SHA-256 digest is stored in memory. Upload and download requests require that capability. The listener uses the same P-256 identity as WSS in release; the mobile module pins HTTPS and rejects HTTP whenever a pin is configured. Development builds use unencrypted HTTP and show an explicit local-network warning; use them only on trusted networks. Release builds use TLS pinning.
 
 The HTTP parser caps request headers at 16 KiB, applies a header deadline and upload read-idle timeout, and limits concurrent connections to 32. Oversized, stalled, or excess connections are rejected or dropped before they can accumulate unbounded parser memory or tasks. A per-transfer write reservation protects chunk offsets while file I/O runs outside the global session lock.
 
@@ -59,7 +59,7 @@ Action: require an owner/admin/sender allowlist, default deny group commands, lo
 
 ### Development connection values remain less protected
 
-`.env` holds credentials and Rust returns them to renderer settings. Development mobile builds keep connection values in AsyncStorage for Expo Go compatibility. Release mobile builds store the remote token and certificate pin through the local module's Android Keystore/iOS Keychain APIs. Mobile can request `SARVAM_API_KEY`, and WhatsApp persists service-specific settings in ignored JSON.
+`.env` holds credentials and Rust returns them to renderer settings. Mobile API keys sync only over authenticated sessions and are stored in Android Keystore/iOS Keychain via SecureStore; when SecureStore is unavailable keys are not persisted (no plaintext AsyncStorage fallback, one-time migration purges legacy copies).
 
 Action: minimize renderer/mobile exposure, keep provider operations proxied where possible, mask readbacks, and scrub logs/errors. Ensure `.env`, WhatsApp data, mobile backups, and support bundles remain excluded.
 
@@ -89,7 +89,7 @@ Action: isolate profiles, restrict downloads/file URLs/custom protocols, bound n
 
 ### SearXNG development secret and exposure
 
-The container settings use `blinky_secret_key_change_me` and bind inside the container to all interfaces; Docker publishes port 8888. Exposure depends on host/firewall configuration.
+The container settings use a per-install random `secret_key` bound to `127.0.0.1` inside the container; Docker publishes it loopback-only as `127.0.0.1:8888`. Do not republish to LAN without rotating the secret.
 
 Action: replace the secret and explicitly bind/publish loopback for local-only development.
 
