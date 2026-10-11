@@ -376,7 +376,7 @@ async fn start_discovery_server(
     mode: crate::transport::TransportMode,
     _tls_acceptor: Option<TlsAcceptor>,
 ) {
-    use axum::{routing::get, Router, Json, http::HeaderMap};
+    use axum::{routing::get, Router, Json};
     use std::net::SocketAddr;
     
     let app_clone = app.clone();
@@ -389,28 +389,21 @@ async fn start_discovery_server(
         (token, cert_pin)
     };
 
+    // NOTE: no CORS headers are set on purpose. The discovery client is the
+    // native mobile app (no Origin). Omitting `Access-Control-Allow-Origin`
+    // keeps arbitrary websites from fingerprinting the install (pin/mode)
+    // via a cross-origin fetch. Native clients are unaffected.
     let app_router = Router::new()
         .route("/discover", get(move || {
             let (_token, cert_pin) = get_token();
             async move {
-                let mut headers = HeaderMap::new();
-                headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
-                headers.insert("Access-Control-Allow-Methods", "GET, OPTIONS".parse().unwrap());
-                headers.insert("Access-Control-Allow-Headers", "Content-Type".parse().unwrap());
                 let resp = serde_json::json!({
                     "certificate_pin": cert_pin,
                     "mode": format!("{:?}", mode),
                     "websocket_port": 9001,
                 });
-                (headers, Json(resp))
+                Json(resp)
             }
-        }))
-        .route("/discover", axum::routing::options(|| async {
-            let mut headers = HeaderMap::new();
-            headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
-            headers.insert("Access-Control-Allow-Methods", "GET, OPTIONS".parse().unwrap());
-            headers.insert("Access-Control-Allow-Headers", "Content-Type".parse().unwrap());
-            (headers, "OK")
         }));
 
     let addr: SocketAddr = "0.0.0.0:9004".parse().unwrap();
@@ -469,7 +462,7 @@ pub async fn start_websocket_server(app: AppHandle) {
     };
     println!("WebSocket server listening on {} ({:?})", addr, mode);
 
-    // Discovery endpoint for mobile auto-connect (returns token + cert pin)
+    // Discovery endpoint for mobile auto-connect (pin + mode only, no token)
     let mode_clone = mode;
     let app_discovery = app.clone();
     let tls_acceptor_discovery = tls_acceptor.clone();
@@ -984,9 +977,30 @@ where
         .to_string()
     }
 
+    /// Maximum accepted WebSocket control-frame size (256 KiB). Larger frames
+    /// are rejected before parsing to bound memory/CPU on the LAN surface.
+    /// File bytes never travel here — they use the chunked HTTP transfer.
+    const MAX_WS_FRAME_BYTES: usize = 256 * 1024;
+    /// Maximum accepted Antigravity IDE prompt length.
+    const MAX_ANTIGRAVITY_PROMPT_CHARS: usize = 2000;
+
     while let Some(msg) = ws_receiver.next().await {
         let msg = msg?;
         if msg.is_text() || msg.is_binary() {
+            if msg.len() > MAX_WS_FRAME_BYTES {
+                eprintln!(
+                    "REJECTED oversized WebSocket frame ({} bytes) from {}",
+                    msg.len(),
+                    peer_addr
+                );
+                let denied = auth_denied("oversized_frame");
+                let _ = ws_sender
+                    .lock()
+                    .await
+                    .send(Message::Text(denied.into()))
+                    .await;
+                continue;
+            }
             let text = msg.to_text()?;
             let trimmed = text.trim();
 
@@ -1317,6 +1331,14 @@ where
                         continue;
                     } else if msg_type == "antigravity_prompt" {
                         if let Some(prompt) = parsed.get("prompt").and_then(|p| p.as_str()) {
+                            if prompt.len() > MAX_ANTIGRAVITY_PROMPT_CHARS {
+                                eprintln!(
+                                    "REJECTED oversized antigravity_prompt ({} chars) from {}",
+                                    prompt.len(),
+                                    peer_addr
+                                );
+                                continue;
+                            }
                             println!("blinky: dispatching mobile prompt to Antigravity IDE: {}", prompt);
                             let prompt_text = prompt.to_string();
                             let root = project_root();
@@ -1572,6 +1594,23 @@ where
                 } else {
                     (None, None)
                 };
+
+                // Bound fan-out cost: overlong queries/images are rejected
+                // instead of being emitted to the UI + daemon stdin.
+                const MAX_MOBILE_QUERY_CHARS: usize = 8000;
+                const MAX_ATTACHED_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+                if query_text.len() > MAX_MOBILE_QUERY_CHARS
+                    || attached_image.as_ref().map(|s| s.len()).unwrap_or(0)
+                        > MAX_ATTACHED_IMAGE_BYTES
+                {
+                    eprintln!(
+                        "REJECTED oversized mobile query (query {} chars, image {} bytes) from {}",
+                        query_text.len(),
+                        attached_image.as_ref().map(|s| s.len()).unwrap_or(0),
+                        peer_addr
+                    );
+                    continue;
+                }
 
                 println!(
                     "blinky: received remote query from mobile: '{}' (req_id: {})",

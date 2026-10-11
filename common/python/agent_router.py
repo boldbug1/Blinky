@@ -97,8 +97,8 @@ def audit_code(code_str):
     except Exception as e:
         return False, f"AST parsing failed: {str(e)}"
 
-    forbidden_imports = {"subprocess", "shutil", "os.system", "os.popen", "pty"}
-    forbidden_calls = {"exec", "eval", "system", "popen", "spawn"}
+    forbidden_imports = {"subprocess", "shutil", "os.system", "os.popen", "pty", "importlib", "ctypes", "multiprocessing"}
+    forbidden_calls = {"exec", "eval", "system", "popen", "spawn", "__import__", "compile", "open"}
 
     uses_playwright = False
     has_default_timeout = False
@@ -543,11 +543,22 @@ CODE:
 async def execute_single_tool_call(tool_call, registry, query, semaphore, request_id):
     tool_name = tool_call.get("tool_name", "")
     arguments = tool_call.get("arguments", {})
+    # Fail-closed: tool names are registry keys + filenames. Reject anything
+    # outside snake_case so LLM routing cannot escape tools/ via traversal.
+    if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", tool_name):
+        return False, None, f"Tool '{tool_name}' rejected: invalid tool name"
     if tool_name not in registry:
         return False, None, f"Tool '{tool_name}' not found in registry"
-    
+
     tool_details = registry[tool_name]
-    filepath = Path(__file__).parent / "tools" / f"{tool_name}.py"
+    tools_dir = Path(__file__).parent / "tools"
+    filepath = tools_dir / f"{tool_name}.py"
+    # Containment: resolve symlinks and require the target to stay in tools/.
+    try:
+        if filepath.resolve().parent != tools_dir.resolve():
+            return False, None, f"Tool '{tool_name}' rejected: path escape"
+    except Exception:
+        return False, None, f"Tool '{tool_name}' rejected: cannot resolve path"
     
     # Map arguments
     registered_args = tool_details.get("arguments", [])

@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { saveCredential } from '../lib/credentials';
 import { colors, typography, radius, spacing } from '../theme/theme';
 import { QrScanner, parsePairingQr } from './QrScanner';
 
@@ -487,7 +487,8 @@ export function SettingsModal(props: SettingsModalProps) {
                 onFocus={handleInputFocus}
                 onChangeText={(val) => {
                   props.setWorkstationPin(val);
-                  AsyncStorage.setItem(props.WORKSTATION_PIN_STORAGE_KEY, val).catch(() => {});
+                  // Secure storage in release (Keystore/Keychain), AsyncStorage in dev.
+                  saveCredential('workstation_pin', props.WORKSTATION_PIN_STORAGE_KEY, val).catch(() => {});
                 }}
                 secureTextEntry
                 autoCapitalize="none"

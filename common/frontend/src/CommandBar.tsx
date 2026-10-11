@@ -331,9 +331,7 @@ export function CommandBar() {
   const [geminiModel, setGeminiModel] = useState<string>(() => {
     return localStorage.getItem('blinky_gemini_model') || 'gemini-2.5-flash';
   });
-  const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
-    return localStorage.getItem('blinky_gemini_api_key') || '';
-  });
+  const [geminiApiKey, setGeminiApiKey] = useState<string>('');
   const [geminiSearchQuery, setGeminiSearchQuery] = useState<string>('');
   const [isGeminiSearchOpen, setIsGeminiSearchOpen] = useState<boolean>(false);
   const [showGeminiConfig, setShowGeminiConfig] = useState<boolean>(false);
@@ -351,7 +349,7 @@ export function CommandBar() {
 
   const updateGeminiApiKey = (newKey: string) => {
     setGeminiApiKey(newKey);
-    localStorage.setItem('blinky_gemini_api_key', newKey);
+    // NOTE: keys stay in memory only — never localStorage (XSS/file-read theft).
     if (newKey.trim().length > 10) {
       void refreshGeminiModels(newKey);
     }

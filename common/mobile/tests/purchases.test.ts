@@ -68,13 +68,17 @@ describe('Monetization & Promo Code Engine (lib/purchases.ts)', () => {
   beforeEach(async () => {
     await resetPromoUnlockForDebug();
     storage.clear();
+    process.env.EXPO_PUBLIC_PROMO_CODES = 'SHIPATHON,BLINKYVIP,EARLYBIRD';
   });
 
-  test('getAllowedPromoCodes returns default fallback codes when env is standard', () => {
-    const codes = getAllowedPromoCodes();
-    expect(codes).toContain('SHIPATHON');
-    expect(codes).toContain('BLINKYVIP');
-    expect(codes).toContain('EARLYBIRD');
+  test('getAllowedPromoCodes returns empty when no env codes are configured (no bypass by default)', () => {
+    delete process.env.EXPO_PUBLIC_PROMO_CODES;
+    try {
+      const codes = getAllowedPromoCodes();
+      expect(codes).toEqual([]);
+    } finally {
+      process.env.EXPO_PUBLIC_PROMO_CODES = 'SHIPATHON,BLINKYVIP,EARLYBIRD';
+    }
   });
 
   test('initially user does not have PC access without a redeemed code or subscription', async () => {

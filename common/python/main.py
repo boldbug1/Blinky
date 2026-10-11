@@ -539,8 +539,16 @@ def run(
                 app_to_open = plan["app_to_open"]
                 try:
                     if os.name == "nt" and ":" in app_to_open:
+                        import re
                         import subprocess
-                        subprocess.Popen(f"start {app_to_open}", shell=True)
+                        # Fail-closed: only allow http(s) URLs or bare app names.
+                        # Never interpolate LLM-controlled text into a shell string.
+                        target = app_to_open.strip()
+                        if re.fullmatch(r"https?://[^\s\"&|<>^]+", target):
+                            subprocess.Popen(["cmd", "/c", "start", "", target])
+                        else:
+                            from computer_use.tools import open_app_tool
+                            open_app_tool(target)
                         time.sleep(1.0)
                     else:
                         from computer_use.tools import open_app_tool

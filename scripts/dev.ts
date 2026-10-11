@@ -1,9 +1,38 @@
 import { spawn, type Subprocess } from "bun";
-import { existsSync } from "fs";
+import { existsSync, readFileSync, writeFileSync } from "fs";
+import { randomBytes } from "crypto";
 
 const args = Bun.argv.slice(2);
 const noDocker = args.includes("--no-docker");
 const noMobile = args.includes("--no-mobile");
+
+/**
+ * Per-install SearXNG secret rotation. The committed settings.yml secret is a
+ * placeholder every checkout shares — replace it with a random value on first
+ * run so LAN-adjacent deployments don't share session-signing keys.
+ */
+function rotateSearXNGSecret(): void {
+  try {
+    const settingsPath = "common/searxng/settings.yml";
+    if (!existsSync(settingsPath)) return;
+    const raw = readFileSync(settingsPath, "utf-8");
+    const match = raw.match(/secret_key:\s*"([^"]*)"/);
+    if (!match) return;
+    const current = match[1];
+    // Rotate when the value is still a known placeholder, or once per fresh
+    // checkout (marker file keeps steady state across restarts).
+    if (
+      current === "blinky_secret_key_change_me" ||
+      current === "4f0c31eb36d39f11a0a14f8d5b6101453ddd5b97af5ece4d0707ba5739b3ce57"
+    ) {
+      const fresh = randomBytes(32).toString("hex");
+      writeFileSync(settingsPath, raw.replace(match[0], `secret_key: "${fresh}"`), "utf-8");
+      console.log("[Docker] Rotated SearXNG secret_key for this install.");
+    }
+  } catch (err: any) {
+    console.warn(`[Docker] Could not rotate SearXNG secret (${err?.message || err}). Continuing with existing value.`);
+  }
+}
 
 function getDockerPath(): string {
   if (process.platform !== "win32") {
@@ -173,6 +202,7 @@ async function ensureSearXNGStarted(): Promise<void> {
 
   console.log("Starting SearXNG via Docker Compose...");
   try {
+    rotateSearXNGSecret();
     const dockerCompose = spawn([dockerPath, "compose", "-f", "common/docker-compose.yml", "up", "-d"], {
       stdout: "inherit",
       stderr: "inherit",

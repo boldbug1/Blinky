@@ -95,10 +95,16 @@ def get_backend_url():
     return "http://localhost:3000"
 
 def get_headers():
-    return {
+    headers = {
         "X-Session-Id": SESSION_ID,
         "Content-Type": "application/json"
     }
+    # Forward the shared service token when configured (see server.js
+    # WHATSAPP_API_TOKEN). Empty = loopback-only service with no token.
+    token = os.getenv("WHATSAPP_API_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 def run_status(base_url):
     """Ensure session is registered and check connection status."""

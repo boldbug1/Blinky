@@ -116,14 +116,15 @@ async def test_generalization_loop_success(tmp_path):
     mock_audit = MagicMock(return_value=(True, "Safe"))
 
     with patch("utils.generalizer.ask_text_model", return_value=llm_decision):
-        # Run generalization tool
-        await generalize_tool(
-            "lookup_mandela_info",
-            "Nelson Mandela",
-            ["query"],
-            registry_path,
-            mock_audit
-        )
+        with patch.dict("os.environ", {"BLINKY_ENABLE_TOOL_GENERALIZATION": "1"}):
+            # Run generalization tool
+            await generalize_tool(
+                "lookup_mandela_info",
+                "Nelson Mandela",
+                ["query"],
+                registry_path,
+                mock_audit
+            )
         
         # Verify the original tool file is deleted and registry updated
         assert not original_tool_path.exists()

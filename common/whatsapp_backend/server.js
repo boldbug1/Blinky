@@ -56,6 +56,9 @@ const frontendDistCandidates = [
     path.join(__dirname, '..', 'frontend', 'dist'),
 ];
 const frontendDist = frontendDistCandidates.find((p) => existsSync(path.join(p, 'index.html'))) || frontendDistCandidates[0];
+// Loopback gate first: the bundled UI is local-only too. Non-loopback peers
+// get 403 for everything below, even if HOST is widened behind a proxy.
+app.use(requireLocalhost);
 app.use(express.static(frontendDist));
 
 // ── Session middleware ─────────────────────────────────────────────────────────

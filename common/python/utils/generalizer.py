@@ -65,6 +65,17 @@ async def run_verification_script(filepath: Path, args_json: dict, timeout=30) -
     except Exception as e:
         return False, str(e)
 
+def is_generalization_enabled() -> bool:
+    """Opt-in gate for LLM tool self-rewrite. Default OFF: executing
+    model-written code and persisting it into tools/ is an RCE surface.
+    Set BLINKY_ENABLE_TOOL_GENERALIZATION=1 to re-enable."""
+    return os.getenv("BLINKY_ENABLE_TOOL_GENERALIZATION", "").strip().lower() in ("1", "true", "yes")
+
+
+def is_safe_tool_name(name: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9_]{1,64}", name or ""))
+
+
 def parse_llm_json(response_text: str) -> dict:
     """Robust parser for LLM json output."""
     if isinstance(response_text, dict):
@@ -90,7 +101,15 @@ async def generalize_tool(
 ):
     """
     Evaluates, rewrites, and verifies a generalized tool module in the background.
+    Disabled by default (see is_generalization_enabled): executing and
+    persisting model-written code is an RCE surface.
     """
+    if not is_generalization_enabled():
+        LOGGER.info("Tool generalization skipped (BLINKY_ENABLE_TOOL_GENERALIZATION not set).")
+        return
+    if not is_safe_tool_name(original_tool_name):
+        LOGGER.warning(f"Refusing to generalize unsafe tool name '{original_tool_name}'.")
+        return
     LOGGER.info(f"Background generalization started for tool '{original_tool_name}' (query: '{original_query}')")
     
     # Load original registry & file
@@ -177,9 +196,21 @@ Respond ONLY with valid JSON.
         LOGGER.error("Generalization decision missing critical fields.")
         return
 
+    # Fail-closed: LLM-chosen filenames must be contained in tools/.
+    if not is_safe_tool_name(gen_name):
+        LOGGER.warning(f"Refusing to persist unsafe generalized name '{gen_name}'.")
+        return
+
     # Let's ensure temp candidate path
     temp_filepath = registry_path.parent / "temp_candidate.py"
     final_filepath = registry_path.parent / f"{gen_name}.py"
+    try:
+        if final_filepath.resolve().parent != registry_path.parent.resolve():
+            LOGGER.warning(f"Refusing to persist generalized tool outside tools/ '{gen_name}'.")
+            return
+    except Exception:
+        LOGGER.warning("Refusing to persist generalized tool: cannot resolve path.")
+        return
 
     # Static audit of rewritten code
     is_safe, audit_msg = audit_func(gen_code)

@@ -316,6 +316,31 @@ class PostInstallApp:
         except Exception as e:
             print(f"Error writing to env: {e}")
 
+    def _rotate_searxng_secret(self):
+        """Replace a placeholder SearXNG secret_key with a per-install random
+        value. The committed settings.yml secret is shared by every checkout."""
+        import re
+        import secrets
+        try:
+            settings_path = os.path.join(self.common_dir, "searxng", "settings.yml")
+            if not os.path.exists(settings_path):
+                return
+            with open(settings_path, "r", encoding="utf-8") as f:
+                raw = f.read()
+            m = re.search(r'secret_key:\s*"([^"]*)"', raw)
+            if not m:
+                return
+            if m.group(1) in (
+                "blinky_secret_key_change_me",
+                "4f0c31eb36d39f11a0a14f8d5b6101453ddd5b97af5ece4d0707ba5739b3ce57",
+            ):
+                fresh = secrets.token_hex(32)
+                raw = raw.replace(m.group(0), f'secret_key: "{fresh}"', 1)
+                with open(settings_path, "w", encoding="utf-8") as f:
+                    f.write(raw)
+        except Exception as e:
+            print(f"SearXNG secret rotation failed: {e}")
+
     def run_background_tasks(self):
         do_ollama = self.install_ollama_var.get()
         do_playwright = self.install_playwright_var.get()
@@ -410,10 +435,11 @@ class PostInstallApp:
                         self.root.after(0, self.complete_installation)
                         return
 
-                # Docker is now running — spin up SearXNG
+                # Docker is now running — rotate the SearXNG secret, then spin up the container
                 try:
                     self.root.after(0, self.update_status, "Running Docker Compose to pull & start local SearXNG...")
                     compose_file = os.path.join(self.common_dir, "docker-compose.yml")
+                    self._rotate_searxng_secret()
                     
                     res = subprocess.run(
                         [self.docker_cmd, "compose", "-f", compose_file, "up", "-d"],

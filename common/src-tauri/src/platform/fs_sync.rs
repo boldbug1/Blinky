@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -55,6 +56,72 @@ fn count_items(path: &Path) -> usize {
     } else {
         0
     }
+}
+
+/// Denylist for mobile-initiated file access. Authenticated mobile peers are
+/// trusted to browse the user's files, but never to exfiltrate credentials,
+/// session state, or OS secrets — even if the remote token leaks.
+fn is_sensitive_path(path: &Path) -> bool {
+    let lower = path.to_string_lossy().to_lowercase();
+    // Normalize separators for substring checks.
+    let norm = lower.replace('/', "\\");
+    const SENSITIVE_FILE_NAMES: [&str; 10] = [
+        ".env",
+        "id_rsa",
+        "id_ed25519",
+        ".pem",
+        ".pfx",
+        ".p12",
+        "ntuser.dat",
+        ".kdbx",
+        "config.h",
+        "identity-key.pem",
+    ];
+    const SENSITIVE_COMPONENTS: [&str; 8] = [
+        "\\.ssh\\",
+        "\\.gnupg\\",
+        "\\.wwebjs_auth",
+        "\\.wwebjs_cache\\",
+        "\\windows\\system32\\config",
+        "\\credentialproviderpipe",
+        "\\blinkytransfers\\.staging\\",
+        "blinky_mobile_api_keys",
+    ];
+    if SENSITIVE_FILE_NAMES
+        .iter()
+        .any(|n| norm.ends_with(n) || norm.contains(&format!("\\{}", n)))
+    {
+        return true;
+    }
+    if SENSITIVE_COMPONENTS.iter().any(|c| norm.contains(c)) {
+        return true;
+    }
+    // Reject symlinks: they can escape the visible directory listing.
+    if fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    false
+}
+
+/// Canonicalizes an existing path, rejecting traversal escapes and symlinks.
+fn canonical_checked(raw: &str) -> Result<PathBuf, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Path is empty".to_string());
+    }
+    // Block shell metacharacters up front (`cmd /C start` and `open` parsing).
+    if trimmed.contains(['&', '|', '<', '>', '^', '\n', '\r']) {
+        return Err("Path contains forbidden characters".to_string());
+    }
+    let p = PathBuf::from(trimmed);
+    let canon = fs::canonicalize(&p).map_err(|_| format!("Path does not exist: {}", p.display()))?;
+    if is_sensitive_path(&canon) {
+        return Err("Access to this path is blocked".to_string());
+    }
+    Ok(canon)
 }
 
 pub fn get_quick_access_folders() -> Vec<QuickAccessFolder> {
@@ -114,7 +181,7 @@ pub fn list_directory(raw_path: &str) -> Result<DirContentResponse, String> {
     let target_path = if raw_path.trim().is_empty() {
         get_home_dir()
     } else {
-        PathBuf::from(raw_path.trim())
+        canonical_checked(raw_path)?
     };
 
     if !target_path.exists() {
@@ -134,6 +201,10 @@ pub fn list_directory(raw_path: &str) -> Result<DirContentResponse, String> {
 
     for item in entries_iter.filter_map(|e| e.ok()) {
         let path = item.path();
+        // Never even reveal credential/session paths in listings.
+        if is_sensitive_path(&path) {
+            continue;
+        }
         let name = item.file_name().to_string_lossy().to_string();
 
         // Skip hidden system files if starting with dot or desktop.ini
@@ -255,13 +326,19 @@ pub fn get_recent_files() -> Vec<FsEntry> {
 }
 
 pub fn search_files(query: &str, start_path: Option<&str>) -> Vec<FsEntry> {
-    let q = query.trim().to_lowercase();
+    let mut q = query.trim().to_lowercase();
     if q.is_empty() {
         return Vec::new();
     }
+    // Bound regex/predicate cost on attacker-controlled queries.
+    if q.len() > 120 {
+        q.truncate(120);
+    }
 
     let root = match start_path {
-        Some(p) if !p.trim().is_empty() && Path::new(p).exists() => PathBuf::from(p.trim()),
+        Some(p) if !p.trim().is_empty() && Path::new(p).exists() => {
+            canonical_checked(p).unwrap_or_else(|_| get_home_dir())
+        }
         _ => get_home_dir(),
     };
 
@@ -276,6 +353,9 @@ pub fn search_files(query: &str, start_path: Option<&str>) -> Vec<FsEntry> {
         if let Ok(iter) = fs::read_dir(&dir) {
             for entry in iter.filter_map(|e| e.ok()) {
                 let path = entry.path();
+                if is_sensitive_path(&path) {
+                    continue;
+                }
                 let name = entry.file_name().to_string_lossy().to_string();
 
                 if name.starts_with('.')
@@ -330,15 +410,18 @@ pub fn search_files(query: &str, start_path: Option<&str>) -> Vec<FsEntry> {
 }
 
 pub fn open_file_on_pc(raw_path: &str) -> Result<(), String> {
-    let path = raw_path.trim();
-    if path.is_empty() {
-        return Err("Path is empty".to_string());
+    // canonical_checked() enforces existence, blocks shell metacharacters
+    // (`cmd /C start` would otherwise interpret `& | < > ^`), and denies
+    // credential/session paths. Must be a real file, not a directory.
+    let path = canonical_checked(raw_path)?;
+    if path.is_dir() {
+        return Err("Cannot open a folder as a file".to_string());
     }
-
+    let path_str = path.to_string_lossy().to_string();
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("cmd")
-            .args(&["/C", "start", "", path])
+            .args([OsStr::new("/C"), OsStr::new("start"), OsStr::new(""), OsStr::new(&path_str)])
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("Failed to open file: {}", e))
@@ -347,7 +430,7 @@ pub fn open_file_on_pc(raw_path: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
-            .arg(path)
+            .arg(&path_str)
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("Failed to open file: {}", e))
@@ -356,7 +439,7 @@ pub fn open_file_on_pc(raw_path: &str) -> Result<(), String> {
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     {
         std::process::Command::new("xdg-open")
-            .arg(path)
+            .arg(&path_str)
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("Failed to open file: {}", e))
@@ -366,14 +449,13 @@ pub fn open_file_on_pc(raw_path: &str) -> Result<(), String> {
 pub fn read_file_base64(raw_path: &str, max_bytes: u64) -> Result<(String, String, u64), String> {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-    let path = Path::new(raw_path.trim());
-    if !path.exists() {
-        return Err(format!("File does not exist: {}", path.display()));
-    }
+    // Same jail as open/list: canonicalize, block metachars, deny
+    // credential/session paths and symlinks.
+    let path = canonical_checked(raw_path)?;
     if path.is_dir() {
         return Err("Cannot open a folder as a file".to_string());
     }
-    let metadata = fs::metadata(path).map_err(|e| format!("Cannot read file metadata: {}", e))?;
+    let metadata = fs::metadata(&path).map_err(|e| format!("Cannot read file metadata: {}", e))?;
     let size = metadata.len();
     if size > max_bytes {
         return Err(format!(
@@ -382,7 +464,7 @@ pub fn read_file_base64(raw_path: &str, max_bytes: u64) -> Result<(String, Strin
             crate::file_transfer::human_bytes(max_bytes)
         ));
     }
-    let bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let bytes = fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
     let b64 = STANDARD.encode(&bytes);
     let name = path
         .file_name()

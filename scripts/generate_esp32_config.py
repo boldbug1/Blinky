@@ -32,7 +32,10 @@ def get_wifi_credentials() -> tuple[str, str]:
     ssid = env.get("ESP32_WIFI_SSID") or os.environ.get("ESP32_WIFI_SSID")
     password = env.get("ESP32_WIFI_PASSWORD") or os.environ.get("ESP32_WIFI_PASSWORD")
 
-    # If missing in .env, attempt to detect from local Windows Wi-Fi profile
+    # If SSID is missing in .env, detect the current connection name only.
+    # NOTE: the Wi-Fi password is NEVER auto-extracted (no `netsh ... key=clear`):
+    # silently reading stored credentials would surprise the user. Set
+    # ESP32_WIFI_SSID / ESP32_WIFI_PASSWORD explicitly in .env.
     if not ssid and sys.platform == "win32":
         try:
             out = subprocess.check_output(["netsh", "wlan", "show", "interfaces"], text=True)
@@ -41,16 +44,9 @@ def get_wifi_credentials() -> tuple[str, str]:
                 detected_ssid = m.group(1).strip()
                 # If connected to 5G, check for 2.4G equivalent
                 if detected_ssid.endswith("_5G"):
-                    base_ssid = detected_ssid[:-3]
-                    ssid = base_ssid
+                    ssid = detected_ssid[:-3]
                 else:
                     ssid = detected_ssid
-
-                # Query password
-                p_out = subprocess.check_output(["netsh", "wlan", "show", "profile", f"name={ssid}", "key=clear"], text=True)
-                km = re.search(r"Key Content\s*:\s*(.+)$", p_out)
-                if km:
-                    password = km.group(1).strip()
         except Exception:
             pass
 

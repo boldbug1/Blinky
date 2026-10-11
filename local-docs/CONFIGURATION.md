@@ -129,5 +129,5 @@ Advanced WhatsApp environment-only tunables read through `getSetting` are `AUTO_
 - `.env_example` is the least-bad minimal template but does not list all supported keys.
 - `common/.envexample` is malformed/stale and includes old `CLICKY_*` names; do not copy it.
 - Root Rust/settings defaults, Python provider defaults, WIL/agent defaults, and setup-script examples are not fully unified.
-- `common/searxng/settings.yml` uses a per-install random `secret_key` bound to `127.0.0.1`; compose publishes it as `127.0.0.1:8888:8080` (loopback-only). Regenerate the secret on setup; never publish SearXNG to LAN without rotating it.
+- `common/searxng/settings.yml` uses a per-install random `secret_key` bound to `127.0.0.1`; compose publishes it as `127.0.0.1:8888:8080` (loopback-only). `scripts/dev.ts` (`rotateSearXNGSecret`) and `post_install.py` (`_rotate_searxng_secret`) rotate placeholder values on setup; never publish SearXNG to LAN without rotating it.
 - The mobile subtree instruction references Expo 56 while its package currently pins Expo 57.

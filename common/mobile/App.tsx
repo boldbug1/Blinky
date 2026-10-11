@@ -43,6 +43,11 @@ import {
   setAudioModeAsync,
 } from 'expo-audio';
 import { usePCWebSocket, ConnectionStatus } from './usePCWebSocket';
+import {
+  readSavedCredential,
+  saveCredential,
+  deleteSavedCredential,
+} from './lib/credentials';
 import { sendWakeOnLan, MAC_STORAGE_KEY, WOL_BROADCAST_STORAGE_KEY } from './lib/wol';
 import { triggerHaptic } from './lib/haptics';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -105,37 +110,6 @@ const loadNativeSecureSocketModule = (): NativeSecureSocketModule | null => {
   } catch {
     return null;
   }
-};
-
-const readSavedCredential = async (secureKey: string, legacyKey: string): Promise<string | null> => {
-  if (RELEASE_TRANSPORT) {
-    const mod = loadNativeSecureSocketModule();
-    if (mod && 'isNative' in mod && !(mod as any).isNative) return null;
-    return mod?.getSecureValue(secureKey) || null;
-  }
-  return AsyncStorage.getItem(legacyKey);
-};
-
-const saveCredential = async (secureKey: string, legacyKey: string, value: string): Promise<void> => {
-  if (RELEASE_TRANSPORT) {
-    const nativeModule = loadNativeSecureSocketModule();
-    if (!nativeModule || ('isNative' in nativeModule && !(nativeModule as any).isNative)) {
-      throw new Error('Secure credential storage is unavailable in this build.');
-    }
-    await nativeModule.setSecureValue(secureKey, value);
-    return;
-  }
-  await AsyncStorage.setItem(legacyKey, value);
-};
-
-const deleteSavedCredential = async (secureKey: string, legacyKey: string): Promise<void> => {
-  if (RELEASE_TRANSPORT) {
-    const mod = loadNativeSecureSocketModule();
-    if (mod && 'isNative' in mod && !(mod as any).isNative) return;
-    await mod?.deleteSecureValue(secureKey);
-    return;
-  }
-  await AsyncStorage.removeItem(legacyKey);
 };
 
 let VolumeManager: any = null;
@@ -718,7 +692,7 @@ export default function App() {
   const [isSendingWol, setIsSendingWol] = useState(false);
   const [wolFeedback, setWolFeedback] = useState<string | null>(null);
   const [isWorkstationLocked, setIsWorkstationLocked] = useState(false);
-  const [workstationPin, setWorkstationPin] = useState('damnthatsalongpassword');
+  const [workstationPin, setWorkstationPin] = useState('');
   const [showPinPromptModal, setShowPinPromptModal] = useState(false);
   const [inputPin, setInputPin] = useState('');
   const [rememberPin, setRememberPin] = useState(true);
@@ -1935,12 +1909,11 @@ export default function App() {
           readSavedCredential('certificate_pin', CERTIFICATE_PIN_STORAGE_KEY),
           AsyncStorage.getItem(MAC_STORAGE_KEY),
           AsyncStorage.getItem(WOL_BROADCAST_STORAGE_KEY),
-          AsyncStorage.getItem(WORKSTATION_PIN_STORAGE_KEY),
+          readSavedCredential('workstation_pin', WORKSTATION_PIN_STORAGE_KEY),
         ]);
         if (savedMac) setMacAddress(savedMac);
         if (savedWolIp) setWolBroadcastIp(savedWolIp);
         if (savedWorkstationPin) setWorkstationPin(savedWorkstationPin);
-        else setWorkstationPin('damnthatsalongpassword');
         if (savedToken) setRemoteToken(savedToken);
         if (savedPin) setCertificatePin(savedPin);
 
@@ -2084,6 +2057,7 @@ export default function App() {
         AsyncStorage.removeItem(STORAGE_KEY),
         deleteSavedCredential('remote_token', TOKEN_STORAGE_KEY),
         deleteSavedCredential('certificate_pin', CERTIFICATE_PIN_STORAGE_KEY),
+        deleteSavedCredential('workstation_pin', WORKSTATION_PIN_STORAGE_KEY),
       ]);
     } catch (e) {}
   };
@@ -2303,7 +2277,8 @@ export default function App() {
     }
     if (rememberPin) {
       setWorkstationPin(trimmed);
-      AsyncStorage.setItem(WORKSTATION_PIN_STORAGE_KEY, trimmed).catch(() => {});
+      // Secure storage in release (Keystore/Keychain), AsyncStorage in dev.
+      saveCredential('workstation_pin', WORKSTATION_PIN_STORAGE_KEY, trimmed).catch(() => {});
     }
     setShowPinPromptModal(false);
     setInputPin('');

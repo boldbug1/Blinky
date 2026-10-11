@@ -9,21 +9,20 @@ export const PROMO_CODE_STORAGE_KEY = '@blinky_pc_redeemed_code';
 export const PC_ENTITLEMENT_ID =
   process.env.EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID || 'pc_access';
 
-const DEFAULT_PROMO_CODES = ['SHIPATHON', 'BLINKYVIP', 'EARLYBIRD'];
-
 /**
- * Returns the list of valid promo codes parsed from the environment variable or defaults.
+ * Returns the list of valid promo codes parsed from the environment variable.
+ * No in-code defaults: a build without EXPO_PUBLIC_PROMO_CODES configured
+ * has no promo bypass. Operators set codes per-release via EAS secrets.
  */
 export function getAllowedPromoCodes(): string[] {
   const envCodes = process.env.EXPO_PUBLIC_PROMO_CODES;
   if (!envCodes) {
-    return DEFAULT_PROMO_CODES;
+    return [];
   }
-  const parsed = envCodes
+  return envCodes
     .split(',')
     .map((c: string) => c.trim().toUpperCase())
     .filter(Boolean);
-  return parsed.length > 0 ? parsed : DEFAULT_PROMO_CODES;
 }
 
 let isConfigured = false;

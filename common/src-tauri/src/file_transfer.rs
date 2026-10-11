@@ -1477,6 +1477,36 @@ fn validate_filename(filename: &str) -> Result<(), &'static str> {
     {
         return Err("This file name is reserved by Windows.");
     }
+    // Block executable / scriptable types from mobile uploads: a compromised
+    // or malicious peer could otherwise stage a payload in Downloads and rely
+    // on the user double-clicking it. Data files only.
+    if let Some(ext) = filename.rsplit('.').next().map(str::to_ascii_lowercase) {
+        if filename.contains('.')
+            && matches!(
+                ext.as_str(),
+                "exe" | "msi"
+                    | "bat"
+                    | "cmd"
+                    | "ps1"
+                    | "vbs"
+                    | "js"
+                    | "jse"
+                    | "wsf"
+                    | "wsh"
+                    | "scr"
+                    | "com"
+                    | "pif"
+                    | "jar"
+                    | "apk"
+                    | "appx"
+                    | "msix"
+                    | "dll"
+                    | "sys"
+            )
+        {
+            return Err("Executable file types cannot be uploaded from mobile.");
+        }
+    }
     Ok(())
 }
 
